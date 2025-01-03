@@ -1,11 +1,22 @@
 // netlify/functions/recommend/recommend.js
-
-const { spawn } = require('child_process');
+const { spawnSync } = require('child_process');
 const path = require('path');
 
 exports.handler = async (event, context) => {
+  // Handle CORS preflight
+  if (event.httpMethod === 'OPTIONS') {
+    return {
+      statusCode: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS'
+      }
+    };
+  }
+
   // Only allow POST requests
-  if (event.httpMethod !== 'POST' && event.httpMethod !== 'OPTIONS') {
+  if (event.httpMethod !== 'POST') {
     return {
       statusCode: 405,
       headers: {
@@ -16,95 +27,80 @@ exports.handler = async (event, context) => {
     };
   }
 
-  // Handle CORS preflight
-  if (event.httpMethod === 'OPTIONS') {
-    return {
-      statusCode: 200,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS'
-      },
-      body: ''
-    };
-  }
+  try {
+    // Try different Python commands
+    const pythonCommands = ['python', 'python3', 'python3.9'];
+    let pythonProcess = null;
+    let error = null;
 
-  // Use system Python
-  const pythonProcess = spawn('/var/lang/bin/python3.9', [
-    path.join(__dirname, 'recommend_script.py')
-  ]);
-
-  return new Promise((resolve, reject) => {
-    let dataString = '';
-    let errorString = '';
-
-    // Send data to Python script
-    pythonProcess.stdin.write(event.body);
-    pythonProcess.stdin.end();
-
-    pythonProcess.stdout.on('data', (data) => {
-      dataString += data.toString();
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      errorString += data.toString();
-    });
-
-    pythonProcess.on('close', (code) => {
-      if (code !== 0) {
-        console.error('Python process error:', errorString);
-        resolve({
-          statusCode: 500,
-          headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            error: 'Internal server error',
-            details: errorString
-          })
-        });
-        return;
-      }
-
+    for (const cmd of pythonCommands) {
       try {
-        const result = JSON.parse(dataString);
-        resolve({
-          statusCode: 200,
-          headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(result)
+        pythonProcess = spawnSync(cmd, [path.join(__dirname, 'recommend_script.py')], {
+          input: event.body,
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe']
         });
-      } catch (e) {
-        resolve({
-          statusCode: 500,
-          headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            error: 'Invalid response from model',
-            details: e.message
-          })
-        });
-      }
-    });
 
-    pythonProcess.on('error', (err) => {
-      console.error('Failed to start Python process:', err);
-      resolve({
+        if (pythonProcess.status === 0) {
+          break;
+        }
+      } catch (e) {
+        error = e;
+        continue;
+      }
+    }
+
+    if (!pythonProcess || pythonProcess.status !== 0) {
+      console.error('Python execution failed:', error || pythonProcess?.stderr);
+      return {
         statusCode: 500,
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          error: 'Failed to start Python process',
-          details: err.message
+          error: 'Failed to execute Python script',
+          details: (error || pythonProcess?.stderr)?.toString()
         })
-      });
-    });
-  });
+      };
+    }
+
+    try {
+      const result = JSON.parse(pythonProcess.stdout);
+      return {
+        statusCode: 200,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(result)
+      };
+    } catch (e) {
+      return {
+        statusCode: 500,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          error: 'Invalid response from model',
+          details: e.message,
+          output: pythonProcess.stdout
+        })
+      };
+    }
+  } catch (error) {
+    console.error('Function error:', error);
+    return {
+      statusCode: 500,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        error: 'Server error',
+        details: error.message
+      })
+    };
+  }
 };
