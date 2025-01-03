@@ -1,0 +1,21 @@
+[build]
+  command = """
+    cd netlify/functions/recommend && 
+    pip install --upgrade pip &&
+    pip install -r requirements.txt -t . &&
+    rm -rf *.dist-info __pycache__
+  """
+  publish = "."
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+[build.environment]
+  PYTHON_VERSION = "3.9"
+  AWS_LAMBDA_JS_RUNTIME = "nodejs16.x"

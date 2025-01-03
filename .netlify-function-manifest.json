@@ -1,0 +1,6 @@
+{
+  "recommend": {
+    "handler": "recommend.handler",
+    "runtime": "python3.9"
+  }
+}
