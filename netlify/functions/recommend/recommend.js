@@ -1,9 +1,64 @@
 // netlify/functions/recommend/recommend.js
-const { spawnSync } = require('child_process');
+
+const { TfIdf } = require('natural');
+const axios = require('axios');
+const fs = require('fs').promises;
 const path = require('path');
+const cosineSimilarity = require('cosine-similarity');
+
+class QuestionRecommender {
+  constructor(questionsData) {
+    this.questions = questionsData;
+    this.tfidf = new TfIdf();
+    
+    // Create TF-IDF vectors for questions
+    this.questions.forEach(q => {
+      this.tfidf.addDocument(q.text || '');
+    });
+  }
+
+  recommendQuestions(inputQuestions, numRecommendations = 8) {
+    // Convert input questions to TF-IDF vectors
+    const inputVectors = inputQuestions.map(q => {
+      const vector = {};
+      this.tfidf.tfidfs(q, (i, measure) => {
+        vector[i] = measure;
+      });
+      return vector;
+    });
+
+    // Calculate similarities
+    const similarities = this.questions.map((_, docIdx) => {
+      const docVector = {};
+      this.tfidf.tfidfs(docIdx, (i, measure) => {
+        docVector[i] = measure;
+      });
+
+      // Calculate average similarity across all input questions
+      const avgSimilarity = inputVectors.reduce((sum, inputVec) => {
+        return sum + cosineSimilarity(Object.values(inputVec), Object.values(docVector));
+      }, 0) / inputVectors.length;
+
+      return [docIdx, avgSimilarity];
+    });
+
+    // Sort by similarity and get top recommendations
+    const topRecommendations = similarities
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, numRecommendations)
+      .map(([idx, score]) => [
+        this.questions[idx].id,
+        score
+      ]);
+
+    return topRecommendations;
+  }
+}
+
+let recommenderInstance = null;
 
 exports.handler = async (event, context) => {
-  // Handle CORS preflight
+  // Handle CORS
   if (event.httpMethod === 'OPTIONS') {
     return {
       statusCode: 200,
@@ -28,69 +83,51 @@ exports.handler = async (event, context) => {
   }
 
   try {
-    // Try different Python commands
-    const pythonCommands = ['python', 'python3', 'python3.9'];
-    let pythonProcess = null;
-    let error = null;
-
-    for (const cmd of pythonCommands) {
-      try {
-        pythonProcess = spawnSync(cmd, [path.join(__dirname, 'recommend_script.py')], {
-          input: event.body,
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe']
-        });
-
-        if (pythonProcess.status === 0) {
-          break;
-        }
-      } catch (e) {
-        error = e;
-        continue;
-      }
-    }
-
-    if (!pythonProcess || pythonProcess.status !== 0) {
-      console.error('Python execution failed:', error || pythonProcess?.stderr);
+    // Parse request body
+    const body = JSON.parse(event.body);
+    
+    if (!body || !body.questions) {
       return {
-        statusCode: 500,
+        statusCode: 400,
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          error: 'Failed to execute Python script',
-          details: (error || pythonProcess?.stderr)?.toString()
-        })
+        body: JSON.stringify({ error: 'Please provide questions in the request body' })
       };
     }
 
-    try {
-      const result = JSON.parse(pythonProcess.stdout);
-      return {
-        statusCode: 200,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(result)
-      };
-    } catch (e) {
-      return {
-        statusCode: 500,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          error: 'Invalid response from model',
-          details: e.message,
-          output: pythonProcess.stdout
-        })
-      };
+    const inputQuestions = body.questions;
+    const numRecommendations = body.num_recommendations || 8;
+
+    // Initialize recommender if not already done
+    if (!recommenderInstance) {
+      // Fetch model data from cloud storage
+      const modelResponse = await axios.get('https://storage.googleapis.com/model-host/model_prod.json');
+      recommenderInstance = new QuestionRecommender(modelResponse.data);
     }
+
+    // Get recommendations
+    const recommendations = recommenderInstance.recommendQuestions(
+      inputQuestions,
+      numRecommendations
+    );
+
+    return {
+      statusCode: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        recommended_questions: recommendations,
+        input_questions: inputQuestions,
+        num_recommendations: numRecommendations
+      })
+    };
+
   } catch (error) {
-    console.error('Function error:', error);
+    console.error('Error:', error);
     return {
       statusCode: 500,
       headers: {
@@ -98,7 +135,7 @@ exports.handler = async (event, context) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        error: 'Server error',
+        error: 'Internal server error',
         details: error.message
       })
     };
