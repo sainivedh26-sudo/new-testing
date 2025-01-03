@@ -1,21 +1,12 @@
 [build]
-  command = """
-    cd netlify/functions/recommend && 
-    pip install --upgrade pip &&
-    pip install -r requirements.txt -t . &&
-    rm -rf *.dist-info __pycache__
-  """
+  command = "cd netlify/functions/recommend && npm install"
   publish = "."
 
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
-  included_files = ["netlify/functions/recommend/recommend_script.py"]
 
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/:splat"
   status = 200
-
-[build.environment]
-  PYTHON_VERSION = "3.9"
