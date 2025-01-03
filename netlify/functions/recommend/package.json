@@ -2,12 +2,9 @@
   "name": "recommend-function",
   "version": "1.0.0",
   "description": "Question recommender function",
-  "main": "index.js",
-  "dependencies": {
-    "python-shell": "^3.0.1"
-  },
+  "main": "recommend.js",
+  "dependencies": {},
   "engines": {
     "node": ">=14.0.0"
-  },
-  "type": "commonjs"
+  }
 }
