@@ -10,6 +10,7 @@
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
+  included_files = ["netlify/functions/recommend/recommend_script.py"]
 
 [[redirects]]
   from = "/api/*"
@@ -18,4 +19,3 @@
 
 [build.environment]
   PYTHON_VERSION = "3.9"
-  AWS_LAMBDA_JS_RUNTIME = "nodejs16.x"
